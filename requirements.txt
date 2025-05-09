@@ -1,0 +1,7 @@
+streamlit
+pandas
+pyodbc
+python-pptx
+Pillow
+requests
+python-dotenv
