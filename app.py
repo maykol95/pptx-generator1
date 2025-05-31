@@ -92,93 +92,98 @@ if os.path.exists("resultado_consulta.json"):
     orden_columna = st.selectbox("Ordenar por columna (opcional)", [""] + columnas)
     subdiv_col = st.selectbox("Subdividir por columna (opcional, genera un archivo por valor distinto)", [""] + columnas)
 
-    if st.button("Generar PowerPoint"):
-        try:
-            if orden_columna:
-                df = df.sort_values(by=orden_columna)
+if st.button("Generar PowerPoint"):
+    try:
+        if orden_columna:
+            df = df.sort_values(by=orden_columna)
 
-            temp_dir = tempfile.mkdtemp()
-            imagen_col = None
-            for col in df.columns:
-                if df[col].astype(str).str.contains("photogram-livetrade-prod.s3.amazonaws.com").any():
-                    imagen_col = col
-                    break
+        temp_dir = tempfile.mkdtemp()
+        imagen_col = None
+        for col in df.columns:
+            if df[col].astype(str).str.contains("photogram-livetrade-prod.s3.amazonaws.com").any():
+                imagen_col = col
+                break
 
-            if not imagen_col:
-                st.warning("No se encontró ninguna columna con URLs de imagen válidas.")
+        if not imagen_col:
+            st.warning("No se encontró ninguna columna con URLs de imagen válidas.")
+        else:
+            df['img_path'] = None
+            filas_validas = []
+            for i, row in df.iterrows():
+                url = row[imagen_col]
+                try:
+                    response = requests.get(url, stream=True, timeout=5)
+                    if response.status_code == 200:
+                        img_path = os.path.join(temp_dir, f"img_{i}.jpg")
+                        with open(img_path, 'wb') as f:
+                            f.write(response.content)
+                        if os.path.getsize(img_path) > 0:
+                            row['img_path'] = img_path
+                            filas_validas.append(row)
+                except:
+                    continue
+
+            df_filtrado = pd.DataFrame(filas_validas)
+
+            def generar_presentacion(df_slice, nombre):
+                prs = Presentation(BytesIO(template_bytes)) if template_bytes else Presentation()
+                prs.slide_width = Inches(13.33)
+                prs.slide_height = Inches(7.5)
+                layout = prs.slide_layouts[6]
+
+                for i in range(0, len(df_slice), fotos_por_slide):
+                    slide = prs.slides.add_slide(layout)
+                    subset = df_slice.iloc[i:i+fotos_por_slide]
+                    spacing_x = Inches(13.33 / fotos_por_slide)
+                    for j, (_, row) in enumerate(subset.iterrows()):
+                        img_path = row['img_path']
+                        img_width, img_height = calcular_dimensiones(img_path, fotos_por_slide, len(encabezados_seleccionados))
+                        img_left = spacing_x * j + Inches(0.25)
+                        encabezado_height = Inches(0.25 * min(len(encabezados_seleccionados), 6))
+                        img_top = encabezado_height + Inches(0.4)
+
+                        if img_width and img_height:
+                            slide.shapes.add_picture(img_path, img_left, img_top, width=img_width, height=img_height)
+                            encabezado = " | ".join(f"{col}: {row.get(col, '')}" for col in encabezados_seleccionados)
+                            if encabezado:
+                                text_box = slide.shapes.add_textbox(img_left, Inches(0.2), img_width, encabezado_height)
+                                text_frame = text_box.text_frame
+                                text_frame.clear()
+                                for line in encabezado.split(" | "):
+                                    p = text_frame.add_paragraph()
+                                    p.text = line
+                                    p.font.size = Pt(9)
+                                    p.font.bold = True  # 🟡 Negrita
+
+                path = os.path.join(temp_dir, f"{nombre}.pptx")
+                prs.save(path)
+                return path
+
+            if 'archivos_generados' not in st.session_state:
+                st.session_state.archivos_generados = []
+
+            st.session_state.archivos_generados.clear()
+
+            if subdiv_col:
+                for val in df_filtrado[subdiv_col].dropna().unique():
+                    df_part = df_filtrado[df_filtrado[subdiv_col] == val]
+                    pptx_path = generar_presentacion(df_part, str(val))
+                    st.session_state.archivos_generados.append((str(val), pptx_path))
             else:
-                df['img_path'] = None
-                filas_validas = []
-                for i, row in df.iterrows():
-                    url = row[imagen_col]
-                    try:
-                        response = requests.get(url, stream=True, timeout=5)
-                        if response.status_code == 200:
-                            img_path = os.path.join(temp_dir, f"img_{i}.jpg")
-                            with open(img_path, 'wb') as f:
-                                f.write(response.content)
-                            if os.path.getsize(img_path) > 0:
-                                row['img_path'] = img_path
-                                filas_validas.append(row)
-                    except: continue
+                pptx_path = generar_presentacion(df_filtrado, "presentacion")
+                st.session_state.archivos_generados.append(("presentacion", pptx_path))
 
-                df_filtrado = pd.DataFrame(filas_validas)
+    except Exception as e:
+        st.error(f"Error al generar presentación: {e}")
 
-                def generar_presentacion(df_slice, nombre):
-                    prs = Presentation(BytesIO(template_bytes)) if template_bytes else Presentation()
-                    prs.slide_width = Inches(13.33)
-                    prs.slide_height = Inches(7.5)
-                    layout = prs.slide_layouts[6]
-
-                    for i in range(0, len(df_slice), fotos_por_slide):
-                        slide = prs.slides.add_slide(layout)
-                        subset = df_slice.iloc[i:i+fotos_por_slide]
-                        spacing_x = Inches(13.33 / fotos_por_slide)
-                        for j, (_, row) in enumerate(subset.iterrows()):
-                            img_path = row['img_path']
-                            img_width, img_height = calcular_dimensiones(img_path, fotos_por_slide, len(encabezados_seleccionados))
-                            img_left = spacing_x * j + Inches(0.25)
-                            encabezado_height = Inches(0.25 * min(len(encabezados_seleccionados), 6))
-                            img_top = encabezado_height + Inches(0.4)
-
-                            if img_width and img_height:
-                                slide.shapes.add_picture(img_path, img_left, img_top, width=img_width, height=img_height)
-                                encabezado = " | ".join(f"{col}: {row.get(col, '')}" for col in encabezados_seleccionados)
-                                if encabezado:
-                                    text_box = slide.shapes.add_textbox(img_left, Inches(0.2), img_width, encabezado_height)
-                                    text_frame = text_box.text_frame
-                                    text_frame.clear()
-                                    for line in encabezado.split(" | "):
-                                        p = text_frame.add_paragraph()
-                                        p.text = line
-                                        p.font.size = Pt(8)
-                                        p.font.bold = True
-
-                    path = os.path.join(temp_dir, f"{nombre}.pptx")
-                    prs.save(path)
-                    return path
-
-                archivos_generados = []
-
-                if subdiv_col:
-                    for val in df_filtrado[subdiv_col].dropna().unique():
-                        df_part = df_filtrado[df_filtrado[subdiv_col] == val]
-                        pptx_path = generar_presentacion(df_part, str(val))
-                        archivos_generados.append((str(val), pptx_path))
-                else:
-                    pptx_path = generar_presentacion(df_filtrado, "presentacion")
-                    archivos_generados.append(("presentacion", pptx_path))
-
-                for nombre, path in archivos_generados:
-                    with open(path, "rb") as f:
-                        st.download_button(
-                            label=f"📥 Descargar {nombre}.pptx",
-                            data=f,
-                            file_name=f"{nombre}.pptx",
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                        )
-
-                shutil.rmtree(temp_dir)
-
-        except Exception as e:
-            st.error(f"Error al generar presentación: {e}")
+# 🔽 Mostrar botones de descarga siempre que haya archivos generados
+if 'archivos_generados' in st.session_state and st.session_state.archivos_generados:
+    st.subheader("Presentaciones generadas:")
+    for nombre, path in st.session_state.archivos_generados:
+        with open(path, "rb") as f:
+            st.download_button(
+                label=f"📥 Descargar {nombre}.pptx",
+                data=f,
+                file_name=f"{nombre}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            )
